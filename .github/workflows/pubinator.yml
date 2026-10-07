@@ -8,9 +8,9 @@
 #   MASTER_PASSWORD    same as in the Apps Script properties
 #   RESPONSES_CSV_URL  "Publish to web" CSV link for the form responses tab
 #   LOCKIN_URL         the Apps Script web app URL (ends in /exec)
-
+ 
 name: Pubinator
-
+ 
 on:
   schedule:
     - cron: "5 23 * * *"   # 00:05 London in summer (BST)
@@ -20,16 +20,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-
+ 
 permissions:
   contents: read
   pages: write
   id-token: write
-
+ 
 concurrency:
   group: pubinator-pages
   cancel-in-progress: false
-
+ 
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -37,41 +37,57 @@ jobs:
       TZ: Europe/London
     steps:
       - uses: actions/checkout@v4
-
+ 
       - uses: julia-actions/setup-julia@v2
         with:
           version: "1"
-
+ 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
+ 
       - name: Download responses and history
         env:
           RESPONSES_CSV_URL: ${{ secrets.RESPONSES_CSV_URL }}
           LOCKIN_URL: ${{ secrets.LOCKIN_URL }}
         run: |
-          curl -fsSL "$RESPONSES_CSV_URL" -o responses.csv
-          curl -fsSL "$LOCKIN_URL?history=csv" -o history.csv
+          # strip spaces, line breaks and quote marks picked up when pasting the secrets
+          clean() { printf '%s' "$1" | tr -d "[:space:]\"'"; }
+          RESP=$(clean "$RESPONSES_CSV_URL")
+          LOCK=$(clean "$LOCKIN_URL")
+          check() {
+            case "$2" in
+              "") echo "::error::The $1 secret is empty or missing."; exit 1 ;;
+              https://*) ;;
+              *) echo "::error::The $1 secret doesn't start with https:// (check what was pasted)."; exit 1 ;;
+            esac
+          }
+          check RESPONSES_CSV_URL "$RESP"
+          check LOCKIN_URL "$LOCK"
+          case "$RESP" in *output=csv*) ;; *) echo "::warning::RESPONSES_CSV_URL doesn't contain output=csv. Is it the 'Publish to web' CSV link?";; esac
+          case "$LOCK" in */exec) ;; *) echo "::warning::LOCKIN_URL doesn't end in /exec.";; esac
+          curl -fsSL "$RESP" -o responses.csv || { echo "::error::Couldn't download the responses (RESPONSES_CSV_URL)."; exit 1; }
+          curl -fsSL "$LOCK?history=csv" -o history.csv || { echo "::error::Couldn't download the history (LOCKIN_URL)."; exit 1; }
+          head -c 200 responses.csv | grep -qi '<html' && { echo "::error::RESPONSES_CSV_URL returned a web page, not a CSV. Use the 'Publish to web' link with CSV selected."; exit 1; }
+          head -1 history.csv | grep -q '^date,pub' || { echo "::error::LOCKIN_URL?history=csv didn't return the history. Is the new pubinator.gs deployed as a new version?"; exit 1; }
+          echo "LOCKIN_URL=$LOCK" >> "$GITHUB_ENV"
           echo "Responses: $(($(wc -l < responses.csv) - 1)) rows"
           echo "History:"; cat history.csv
-
+ 
       - name: Build page
-        env:
-          LOCKIN_URL: ${{ secrets.LOCKIN_URL }}
         run: julia pubinator.jl responses.csv --pubs pubs.txt --history history.csv --site site --lockin-url "$LOCKIN_URL"
-
+ 
       - name: Lock the order with today's password
         env:
           MASTER_PASSWORD: ${{ secrets.MASTER_PASSWORD }}
         run: |
           node encrypt.mjs site
           test ! -e site/order.json
-
+ 
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
-
+ 
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -81,3 +97,4 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+ 
