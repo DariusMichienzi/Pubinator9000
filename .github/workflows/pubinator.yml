@@ -1,0 +1,83 @@
+# Builds the Pubinator site and publishes it to GitHub Pages.
+#
+# Runs: just after midnight London time (new day, new password), after every
+# lock-in (the gatekeeper asks for a rebuild), whenever you push a change, and
+# when you press "Run workflow" on the Actions tab.
+#
+# Needs these repository secrets (Settings > Secrets and variables > Actions):
+#   MASTER_PASSWORD    same as in the Apps Script properties
+#   RESPONSES_CSV_URL  "Publish to web" CSV link for the form responses tab
+#   LOCKIN_URL         the Apps Script web app URL (ends in /exec)
+
+name: Pubinator
+
+on:
+  schedule:
+    - cron: "5 23 * * *"   # 00:05 London in summer (BST)
+    - cron: "5 0 * * *"    # 00:05 London in winter (GMT)
+  repository_dispatch:
+    types: [pubinator-lockin]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pubinator-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Europe/London
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download responses and history
+        env:
+          RESPONSES_CSV_URL: ${{ secrets.RESPONSES_CSV_URL }}
+          LOCKIN_URL: ${{ secrets.LOCKIN_URL }}
+        run: |
+          curl -fsSL "$RESPONSES_CSV_URL" -o responses.csv
+          curl -fsSL "$LOCKIN_URL?history=csv" -o history.csv
+          echo "Responses: $(($(wc -l < responses.csv) - 1)) rows"
+          echo "History:"; cat history.csv
+
+      - name: Build page
+        env:
+          LOCKIN_URL: ${{ secrets.LOCKIN_URL }}
+        run: julia pubinator.jl responses.csv --pubs pubs.txt --history history.csv --site site --lockin-url "$LOCKIN_URL"
+
+      - name: Lock the order with today's password
+        env:
+          MASTER_PASSWORD: ${{ secrets.MASTER_PASSWORD }}
+        run: |
+          node encrypt.mjs site
+          test ! -e site/order.json
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
