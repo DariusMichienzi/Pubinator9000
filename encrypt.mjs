@@ -1,0 +1,83 @@
+// Pubinator: lock the day's draw order with the day's password.
+//
+// Run after `julia pubinator.jl ... --site DIR`:
+//     MASTER_PASSWORD=... node encrypt.mjs DIR
+//
+// It works out today's password exactly as pubinator.gs does (same word list,
+// same London date), encrypts DIR/order.json with it (PBKDF2 + AES-GCM, the
+// browser's built-in WebCrypto), puts the result into DIR/index.html in place
+// of "__LOCK__", and deletes order.json so the plain order is never published.
+
+import { readFileSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { createHmac, webcrypto } from "node:crypto";
+
+const subtle = webcrypto.subtle;
+const ITERATIONS = 600000;
+
+// Must match the list in pubinator.gs.
+const WORDS = [
+  "acorn", "amber", "anchor", "apple", "arrow", "aspen", "atlas", "autumn", "badge", "bamboo",
+  "banjo", "barley", "basil", "beacon", "beetle", "berry", "birch", "biscuit", "blossom",
+  "bluebell", "bonfire", "bramble", "breeze", "brick", "bridge", "bronze", "bubble", "bucket",
+  "buckle", "button", "cabin", "cactus", "camel", "candle", "canyon", "carrot", "castle", "cedar",
+  "cello", "cherry", "chess", "cider", "cinder", "clover", "cobalt", "cocoa", "comet", "copper",
+  "coral", "cotton", "cradle", "crane", "crater", "cricket", "crimson", "crystal", "cupcake",
+  "daisy", "dawn", "delta", "denim", "desert", "dingo", "dolphin", "domino", "dragon", "drum",
+  "dune", "eagle", "ember", "emerald", "falcon", "feather", "fern", "fiddle", "fig", "finch",
+  "flint", "flute", "forest", "fossil", "fox", "galaxy", "garden", "garnet", "ginger", "glacier",
+  "globe", "goblet", "granite", "grape", "gravel", "guitar", "hammock", "harbour", "harp", "hazel",
+  "heron", "hickory", "honey", "horizon", "hornet", "iceberg", "igloo", "indigo", "island",
+  "ivory", "ivy", "jasmine", "jelly", "jigsaw", "juniper", "kayak", "kettle", "kiwi", "koala",
+  "lagoon", "lantern", "larch", "lemon", "lilac", "lily", "lime", "linen", "lobster", "locket",
+  "lotus", "magnet", "mango", "maple", "marble", "meadow", "melon", "meteor", "mint", "mitten",
+  "monsoon", "moose", "mosaic", "moss", "muffin", "nectar", "nutmeg", "oak", "oasis", "ocean",
+  "olive", "onyx", "opal", "orbit", "orchid", "otter", "owl", "oyster", "paddle", "panda",
+  "papaya", "parrot", "peach", "pebble", "pelican", "pepper", "pickle", "pine", "pistachio",
+  "planet", "plum", "pocket", "pony", "poppy", "prism", "puffin", "pumpkin", "quartz", "quill",
+  "quilt", "rabbit", "radish", "raven", "reef", "ribbon", "river", "robin", "rocket", "rose",
+  "ruby", "saffron", "salmon", "sapphire", "satin", "seal", "sequoia", "shadow", "shell",
+  "sherbet", "silver", "sketch", "sparrow", "spruce", "squid", "squirrel", "starling", "stone",
+  "summit", "sunset", "swallow", "tango", "teapot", "thistle", "thunder", "tiger", "timber",
+  "toffee", "topaz", "torch", "tulip", "tundra", "turnip", "turtle", "umbrella", "valley",
+  "velvet", "violet", "volcano", "walnut", "walrus", "waffle", "wander", "wasp", "whisker",
+  "willow", "window", "winter", "wizard", "yarrow", "yogurt", "zebra", "zephyr", "basin", "bison",
+  "caramel", "cosmos", "dahlia", "ferret", "gecko", "hedgehog", "jaguar", "lynx", "marmot", "newt",
+  "osprey", "pigeon", "quokka", "rhubarb", "sloth", "tapir"
+];
+
+const dir = process.argv[2] || "site";
+const master = (process.env.MASTER_PASSWORD || "").trim();
+if (!master) { console.error("MASTER_PASSWORD is not set."); process.exit(1); }
+if (WORDS.length !== 256) { console.error("Word list must have 256 words."); process.exit(1); }
+
+const now = new Date();
+const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(now);   // yyyy-mm-dd
+const label = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short",
+  day: "numeric", month: "long", year: "numeric" }).format(now).replace(",", "");
+
+function dailyPassword(dateStr) {
+  const b = createHmac("sha256", master).update("pubinator-day|" + dateStr).digest();
+  const num = 10 + (((b[4] << 8) | b[5]) % 90);
+  return [WORDS[b[0]], WORDS[b[1]], WORDS[b[2]], WORDS[b[3]], num].join("-");
+}
+
+const password = dailyPassword(date);
+const orderPath = join(dir, "order.json"), pagePath = join(dir, "index.html");
+const plain = readFileSync(orderPath);
+
+const salt = webcrypto.getRandomValues(new Uint8Array(16));
+const iv = webcrypto.getRandomValues(new Uint8Array(12));
+const base = await subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+const key = await subtle.deriveKey({ name: "PBKDF2", salt, iterations: ITERATIONS, hash: "SHA-256" },
+  base, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+const ct = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv }, key, plain));
+
+const b64 = u => Buffer.from(u).toString("base64");
+const lock = { date, label, iter: ITERATIONS, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+
+const page = readFileSync(pagePath, "utf8");
+if (!page.includes('"__LOCK__"')) { console.error("index.html has no __LOCK__ placeholder."); process.exit(1); }
+writeFileSync(pagePath, page.replace('"__LOCK__"', JSON.stringify(lock)));
+rmSync(orderPath);
+console.log(`Locked the order for ${date} and removed order.json.`);
