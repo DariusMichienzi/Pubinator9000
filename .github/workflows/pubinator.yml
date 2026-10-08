@@ -1,13 +1,15 @@
 # Builds the Pubinator site and publishes it to GitHub Pages.
 #
 # Runs: just after midnight London time (new day, new password), after every
-# lock-in (the gatekeeper asks for a rebuild), whenever you push a change, and
-# when you press "Run workflow" on the Actions tab.
+# lock-in and every form response (the gatekeeper asks for a rebuild),
+# whenever you push a change, and when you press "Run workflow" on the
+# Actions tab.
 #
 # Needs these repository secrets (Settings > Secrets and variables > Actions):
 #   MASTER_PASSWORD    same as in the Apps Script properties
-#   RESPONSES_CSV_URL  "Publish to web" CSV link for the form responses tab
 #   LOCKIN_URL         the Apps Script web app URL (ends in /exec)
+#   RESPONSES_CSV_URL  optional backup: "Publish to web" CSV link for the
+#                      responses tab, used only if the gatekeeper can't serve them
  
 name: Pubinator
  
@@ -16,7 +18,7 @@ on:
     - cron: "5 23 * * *"   # 00:05 London in summer (BST)
     - cron: "5 0 * * *"    # 00:05 London in winter (GMT)
   repository_dispatch:
-    types: [pubinator-lockin]
+    types: [pubinator-lockin, pubinator-response]
   push:
     branches: [main]
   workflow_dispatch:
@@ -62,13 +64,21 @@ jobs:
               *) echo "::error::The $1 secret doesn't start with https:// (check what was pasted)."; exit 1 ;;
             esac
           }
-          check RESPONSES_CSV_URL "$RESP"
           check LOCKIN_URL "$LOCK"
-          case "$RESP" in *output=csv*) ;; *) echo "::warning::RESPONSES_CSV_URL doesn't contain output=csv. Is it the 'Publish to web' CSV link?";; esac
           case "$LOCK" in */exec) ;; *) echo "::warning::LOCKIN_URL doesn't end in /exec.";; esac
-          curl -fsSL "$RESP" -o responses.csv || { echo "::error::Couldn't download the responses (RESPONSES_CSV_URL)."; exit 1; }
+          # a CSV, not a web page or the gatekeeper's JSON status message
+          is_csv() { [ -s "$1" ] && ! head -c 300 "$1" | grep -qiE '<html|^[[:space:]]*\{'; }
+          # responses: fresh from the gatekeeper, else the published link as a backup
+          if curl -fsSL "$LOCK?responses=csv" -o responses.csv && is_csv responses.csv; then
+            echo "Responses read from the gatekeeper."
+          elif [ -n "$RESP" ]; then
+            echo "::warning::Gatekeeper didn't serve the responses (is the latest pubinator.gs deployed as a new version?). Using RESPONSES_CSV_URL instead."
+            curl -fsSL "$RESP" -o responses.csv || { echo "::error::Couldn't download the responses (RESPONSES_CSV_URL)."; exit 1; }
+            is_csv responses.csv || { echo "::error::RESPONSES_CSV_URL returned a web page, not a CSV. Use the 'Publish to web' link with CSV selected."; exit 1; }
+          else
+            echo "::error::Couldn't get the responses from the gatekeeper and there's no RESPONSES_CSV_URL backup."; exit 1
+          fi
           curl -fsSL "$LOCK?history=csv" -o history.csv || { echo "::error::Couldn't download the history (LOCKIN_URL)."; exit 1; }
-          head -c 200 responses.csv | grep -qi '<html' && { echo "::error::RESPONSES_CSV_URL returned a web page, not a CSV. Use the 'Publish to web' link with CSV selected."; exit 1; }
           head -1 history.csv | grep -q '^date,pub' || { echo "::error::LOCKIN_URL?history=csv didn't return the history. Is the new pubinator.gs deployed as a new version?"; exit 1; }
           echo "LOCKIN_URL=$LOCK" >> "$GITHUB_ENV"
           echo "Responses: $(($(wc -l < responses.csv) - 1)) rows"
