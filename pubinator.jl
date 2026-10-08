@@ -615,6 +615,7 @@ const WHEEL_TEMPLATE = raw"""
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pubinator</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='34' r='30' fill='%234a3526'/><path d='M32 34L32.0 7.0A27 27 0 0 1 55.4 20.5Z' fill='%23c0392b'/><path d='M32 34L55.4 20.5A27 27 0 0 1 55.4 47.5Z' fill='%23d9a441'/><path d='M32 34L55.4 47.5A27 27 0 0 1 32.0 61.0Z' fill='%232e7d5b'/><path d='M32 34L32.0 61.0A27 27 0 0 1 8.6 47.5Z' fill='%233b6ea5'/><path d='M32 34L8.6 47.5A27 27 0 0 1 8.6 20.5Z' fill='%238e4b8f'/><path d='M32 34L8.6 20.5A27 27 0 0 1 32.0 7.0Z' fill='%23c8662b'/><circle cx='32' cy='34' r='7' fill='%231b1410' stroke='%23d9a441' stroke-width='2.5'/><path d='M24 0H40L32 13Z' fill='%23d9a441' stroke='%231b1410' stroke-width='1.5' stroke-linejoin='round'/></svg>">
 <style>
   :root {
     --bg: #1b1410; --panel: #261c16; --ink: #f4ead8; --muted: #b9a78d;
@@ -631,9 +632,20 @@ const WHEEL_TEMPLATE = raw"""
   .sub { color: var(--muted); margin-top: 4px; font-size: 15px; }
   .dry { display: inline-block; margin-left: 8px; padding: 1px 8px; border: 1px solid var(--brass-dim);
     border-radius: 99px; font-size: 12px; color: var(--brass); font-family: system-ui, sans-serif; }
-  main { display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; align-items: flex-start;
-    width: 100%; max-width: 1100px; }
-  .left { width: min(560px, 100%); }
+  main { display: grid; gap: 24px 32px; justify-content: center; align-items: start; width: 100%;
+    max-width: 1100px; grid-template-columns: minmax(0, 560px) minmax(0, 380px);
+    grid-template-areas: "left odds" "how odds"; }
+  .left { grid-area: left; min-width: 0; }
+  aside { grid-area: odds; }
+  .how { grid-area: how; }
+  @media (max-width: 1000px) {
+    main { grid-template-columns: minmax(0, 560px); grid-template-areas: "left" "odds" "how"; }
+  }
+  .rankings { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    text-decoration: none; color: var(--ink); font-family: system-ui, sans-serif; font-size: 14px;
+    padding: 14px 20px; transition: border-color .2s, background .2s; }
+  .rankings:hover { border-color: var(--brass-dim); background: #2d2119; }
+  .rankings .go { color: var(--brass); font-weight: 600; white-space: nowrap; }
   .stage { position: relative; width: 100%; aspect-ratio: 1; }
   canvas#wheel { width: 100%; height: 100%; display: block; }
   .pointer { position: absolute; left: 50%; top: -6px; transform: translateX(-50%);
@@ -647,7 +659,6 @@ const WHEEL_TEMPLATE = raw"""
     box-shadow: 0 4px 18px rgba(0,0,0,.6); z-index: 2; }
   button#spin:hover:not(:disabled) { filter: brightness(1.2); }
   button#spin:disabled { cursor: default; }
-  aside { width: min(380px, 100%); }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
   .card h2 { margin: 0 0 10px; font-size: 16px; color: var(--muted); font-weight: 400;
     font-family: system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase; }
@@ -680,9 +691,9 @@ const WHEEL_TEMPLATE = raw"""
   .how dd { margin: 0; color: var(--muted); }
   .how dd b { color: var(--ink); font-weight: 600; }
   .how .note { margin: 12px 0 0; font-family: system-ui, sans-serif; font-size: 12px; color: var(--muted); }
-  #result { margin-top: 18px; text-align: center; opacity: 0; transform: translateY(8px);
-    transition: opacity .6s, transform .6s; pointer-events: none; }
-  #result.show { opacity: 1; transform: none; pointer-events: auto; }
+  #result { display: none; margin-top: 18px; text-align: center; }
+  #result.show { display: block; animation: rise .6s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   #result .label { color: var(--muted); font-family: system-ui, sans-serif; font-size: 13px;
     text-transform: uppercase; letter-spacing: .12em; }
   #result .pub { font-size: clamp(28px, 5vw, 40px); color: var(--brass); margin: 4px 0 10px; }
@@ -747,6 +758,10 @@ const WHEEL_TEMPLATE = raw"""
     </div>
   </div>
   <aside>
+    <a class="card rankings" href="https://tomhigginson.github.io/PubLeaderboard/PubRankings_Extra.html"
+       target="_blank" rel="noopener">
+      <span>For pub rankings, see</span><span class="go">Pub Leaderboard &rarr;</span>
+    </a>
     <div class="card">
       <h2>This draw's odds</h2>
       <table>
@@ -760,29 +775,29 @@ const WHEEL_TEMPLATE = raw"""
         <tbody id="odds"></tbody>
       </table>
     </div>
-    <div class="card how">
-      <h2>How the odds work</h2>
-      <math display="block">
-        <mi>w</mi><mo>=</mo><mi>p</mi>
-        <msup>
-          <mrow><mo stretchy="true">(</mo><mn>1</mn><mo>&minus;</mo>
-            <mfrac><mn>1</mn><mi>x</mi></mfrac>
-          <mo stretchy="true">)</mo></mrow>
-          <mi>y</mi>
-        </msup>
-      </math>
-      <math display="block" class="chance-eq">
-        <mtext>chance</mtext><mo>=</mo>
-        <mfrac><mi>w</mi><mrow><mo>&sum;</mo><msub><mi>w</mi><mtext>all&nbsp;pubs</mtext></msub></mrow></mfrac>
-      </math>
-      <dl>
-        <dt><i>p</i></dt><dd><b>Popularity</b>: how many times the pub has been nominated on the form. Pubs tagged <span class="newtag">new</span> joined from the suggested additions and count one per person who suggested them.</dd>
-        <dt><i>x</i></dt><dd><b>Draws since</b> it was last picked, counted from the history (dates don't matter, so skipped weeks or two draws in one week are fine). Picked last draw means <i>x</i>&nbsp;=&nbsp;1, so <i>w</i>&nbsp;=&nbsp;0 and it can't come up twice in a row. The longer since the last visit, the closer the factor gets to 1.</dd>
-        <dt><i>y</i></dt><dd><b>Times visited</b> in total. Each visit multiplies in another factor below 1. Never visited means <i>w</i>&nbsp;=&nbsp;<i>p</i>.</dd>
-      </dl>
-      <p class="note">After a veto, that pub is removed and the rest are rescaled so their chances add up to 100% again.</p>
-    </div>
   </aside>
+  <div class="card how">
+    <h2>How the odds work</h2>
+    <math display="block">
+      <mi>w</mi><mo>=</mo><mi>p</mi>
+      <msup>
+        <mrow><mo stretchy="true">(</mo><mn>1</mn><mo>&minus;</mo>
+          <mfrac><mn>1</mn><mi>x</mi></mfrac>
+        <mo stretchy="true">)</mo></mrow>
+        <mi>y</mi>
+      </msup>
+    </math>
+    <math display="block" class="chance-eq">
+      <mtext>chance</mtext><mo>=</mo>
+      <mfrac><mi>w</mi><mrow><mo>&sum;</mo><msub><mi>w</mi><mtext>all&nbsp;pubs</mtext></msub></mrow></mfrac>
+    </math>
+    <dl>
+      <dt><i>p</i></dt><dd><b>Popularity</b>: how many times the pub has been nominated on the form. Pubs tagged <span class="newtag">new</span> joined from the suggested additions and count one per person who suggested them.</dd>
+      <dt><i>x</i></dt><dd><b>Draws since</b> it was last picked, counted from the history (dates don't matter, so skipped weeks or two draws in one week are fine). Picked last draw means <i>x</i>&nbsp;=&nbsp;1, so <i>w</i>&nbsp;=&nbsp;0 and it can't come up twice in a row. The longer since the last visit, the closer the factor gets to 1.</dd>
+      <dt><i>y</i></dt><dd><b>Times visited</b> in total. Each visit multiplies in another factor below 1. Never visited means <i>w</i>&nbsp;=&nbsp;<i>p</i>.</dd>
+    </dl>
+    <p class="note">After a veto, that pub is removed and the rest are rescaled so their chances add up to 100% again.</p>
+  </div>
 </main>
 <script>
 const DATA = __PUB_DATA__;
